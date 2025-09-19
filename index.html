@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Modern P2P Chat</title>
+    <style>
+        :root {
+            --background-light: #F7F7F7; --container-light: #FFFFFF; --accent: #007AFF;
+            --text-light: #000000; --bubble-me-light: #007AFF; --bubble-me-text-light: #FFFFFF;
+            --bubble-them-light: #E5E5EA; --bubble-them-text-light: #000000;
+            --status-disconnected: #ff4d4d; --status-connected: #34C759;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            margin: 0; background-color: var(--background-light); display: flex;
+            justify-content: center; align-items: center; height: 100vh;
+        }
+        .chat-container {
+            width: 100%; max-width: 400px; height: 90vh; max-height: 800px;
+            background: var(--container-light); border-radius: 20px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            display: flex; flex-direction: column; overflow: hidden;
+        }
+        .chat-header {
+            padding: 15px 20px; text-align: center; border-bottom: 1px solid #E5E5EA;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .chat-header .title { font-weight: 600; font-size: 1.1em; }
+        .chat-header .status { font-size: 0.8em; color: var(--status-disconnected); font-weight: 600; }
+        .chat-header .status.connected { color: var(--status-connected); }
+        #connect-btn { background: none; border: 1px solid var(--accent); color: var(--accent); border-radius: 15px; padding: 5px 10px; cursor: pointer; font-weight: 500; }
+        .messages-area { flex-grow: 1; padding: 20px; overflow-y: auto; }
+        .message { display: flex; margin-bottom: 15px; }
+        .message .text { padding: 10px 15px; border-radius: 18px; line-height: 1.4; max-width: 75%; word-wrap: break-word; }
+        .message.me { justify-content: flex-end; }
+        .message.me .text { background-color: var(--bubble-me-light); color: var(--bubble-me-text-light); border-bottom-right-radius: 4px; }
+        .message.them { justify-content: flex-start; }
+        .message.them .text { background-color: var(--bubble-them-light); color: var(--bubble-them-text-light); border-bottom-left-radius: 4px; }
+        .input-area { display: flex; padding: 10px 15px; border-top: 1px solid #E5E5EA; background-color: var(--container-light); }
+        .input-area input { flex-grow: 1; border: none; background: transparent; padding: 10px; font-size: 1em; outline: none; }
+        .input-area button { background: var(--accent); border: none; color: white; font-weight: 600; padding: 0 20px; border-radius: 20px; cursor: pointer; transition: background-color 0.2s; }
+        .input-area button:disabled { background-color: #A9A9A9; cursor: not-allowed; }
+        .modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); justify-content: center; align-items: center; }
+        .modal-content { background: white; padding: 20px; border-radius: 10px; width: 90%; max-width: 500px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
+        .modal-content h3 { margin-top: 0; }
+        .modal-content textarea { width: 100%; box-sizing: border-box; height: 100px; margin: 10px 0; padding: 8px; border: 1px solid #ccc; border-radius: 5px; resize: none; }
+        .modal-buttons { display: flex; justify-content: flex-end; gap: 10px; margin-top: 15px; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+</head>
+<body>
+
+<div class="chat-container">
+    <div class="chat-header">
+        <span id="connection-status" class="status">Disconnected</span>
+        <span class="title">Modern P2P Chat</span>
+        <button id="connect-btn">Connect</button>
+    </div>
+    <div class="messages-area" id="messages-area"></div>
+    <div class="input-area">
+        <input type="text" id="message-input" placeholder="Connect to start chatting..." disabled>
+        <button id="send-button" disabled>Send</button>
+    </div>
+</div>
+
+<div id="p2p-modal" class="modal">
+    <div class="modal-content">
+        <h3>P2P Connection</h3>
+        <h4>Step 1: Create an Offer</h4>
+        <textarea id="local-offer" readonly placeholder="Your offer code will appear here..."></textarea>
+        <button onclick="createOffer()">Create & Copy Offer</button>
+        <hr style="margin: 20px 0;">
+        <h4>Step 2: Or, Paste a Code</h4>
+        <textarea id="remote-offer" placeholder="Paste your friend's code here"></textarea>
+        <div class="modal-buttons">
+            <button onclick="document.getElementById('p2p-modal').style.display='none'">Cancel</button>
+            <button onclick="acceptCode()" style="background-color: var(--accent); color: white;">Connect</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const messagesArea = document.getElementById('messages-area');
+    const messageInput = document.getElementById('message-input');
+    const sendButton = document.getElementById('send-button');
+    const connectBtn = document.getElementById('connect-btn');
+    const p2pModal = document.getElementById('p2p-modal');
+    const connectionStatus = document.getElementById('connection-status');
+    const secretKey = "a-truly-secure-secret-key-that-is-shared";
+    
+    let pc;
+    let dataChannel;
+
+    function addMessage(sender, text) {
+        const messageDiv = document.createElement('div');
+        messageDiv.classList.add('message', sender);
+        const textDiv = document.createElement('div');
+        textDiv.classList.add('text');
+        textDiv.textContent = text;
+        messageDiv.appendChild(textDiv);
+        messagesArea.appendChild(messageDiv);
+        messagesArea.scrollTop = messagesArea.scrollHeight;
+    }
+
+    connectBtn.addEventListener('click', () => {
+        p2pModal.style.display = 'flex';
+        // Clear previous offers
+        document.getElementById('local-offer').value = '';
+        document.getElementById('remote-offer').value = '';
+    });
+
+    function initializePeerConnection() {
+        if (pc) pc.close();
+        pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+
+        pc.onicecandidate = e => {
+            if (e.candidate) return;
+            const code = JSON.stringify(pc.localDescription);
+            document.getElementById('local-offer').value = code;
+            if (pc.localDescription.type === 'offer') {
+                navigator.clipboard.writeText(code).then(() => alert('Offer copied! Send it to your friend.'));
+            } else {
+                navigator.clipboard.writeText(code).then(() => alert('Answer copied! Send it back to your friend.'));
+            }
+        };
+
+        pc.ondatachannel = e => {
+            dataChannel = e.channel;
+            setupDataChannel();
+        };
+
+        pc.onconnectionstatechange = () => {
+            connectionStatus.textContent = pc.connectionState.charAt(0).toUpperCase() + pc.connectionState.slice(1);
+            const isConnected = pc.connectionState === 'connected';
+            connectionStatus.classList.toggle('connected', isConnected);
+            messageInput.disabled = !isConnected;
+            sendButton.disabled = !isConnected;
+            messageInput.placeholder = isConnected ? 'Type a message...' : 'Connect to start chatting...';
+        };
+    }
+
+    function setupDataChannel() {
+        dataChannel.onopen = () => console.log("Data channel is open");
+        dataChannel.onclose = () => console.log("Data channel is closed");
+        dataChannel.onmessage = e => receiveMessage(e.data);
+    }
+
+    window.createOffer = function() {
+        initializePeerConnection();
+        dataChannel = pc.createDataChannel("chat");
+        setupDataChannel();
+        pc.createOffer().then(offer => pc.setLocalDescription(offer));
+    }
+
+    window.acceptCode = function() {
+        const codeValue = document.getElementById('remote-offer').value.trim();
+        if (!codeValue) return alert('Please paste a code first.');
+        
+        try {
+            const code = JSON.parse(codeValue);
+            if (code.type === 'offer') {
+                // This user is accepting an offer
+                initializePeerConnection();
+                pc.setRemoteDescription(new RTCSessionDescription(code))
+                  .then(() => pc.createAnswer())
+                  .then(answer => pc.setLocalDescription(answer));
+            } else if (code.type === 'answer') {
+                // This user created an offer and is now getting an answer
+                if (!pc) return alert("You must create an offer first before accepting an answer.");
+                pc.setRemoteDescription(new RTCSessionDescription(code));
+            }
+            p2pModal.style.display = 'none';
+        } catch (e) {
+            alert('Invalid code format.');
+            console.error(e);
+        }
+    }
+
+    function sendMessage() {
+        const text = messageInput.value.trim();
+        if (!text || !dataChannel || dataChannel.readyState !== 'open') return;
+
+        addMessage('me', text);
+        const encrypted = CryptoJS.AES.encrypt(text, secretKey).toString();
+        dataChannel.send(encrypted);
+        messageInput.value = '';
+    }
+
+    function receiveMessage(encryptedText) {
+        try {
+            const bytes = CryptoJS.AES.decrypt(encryptedText, secretKey);
+            const text = bytes.toString(CryptoJS.enc.Utf8);
+            if (text) addMessage('them', text);
+        } catch (e) { console.error("Decryption failed:", e); }
+    }
+
+    sendButton.addEventListener('click', sendMessage);
+    messageInput.addEventListener('keypress', e => {
+        if (e.key === 'Enter') sendMessage();
+    });
+
+</script>
+
+</body>
+</html>
